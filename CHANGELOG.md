@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.1]
+
+### Fixed
+
+- Preserve the selected mouse identity for the virtual device so libinput keeps its DPI profile in grab mode
+
 ## [0.4.0]
 
 ### Added

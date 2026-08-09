@@ -2,6 +2,7 @@ mod app;
 mod config;
 mod input;
 mod tray;
+mod theclicker;
 mod types;
 mod widgets;
 
@@ -31,7 +32,8 @@ fn main() -> eframe::Result<()> {
         let filtered: Vec<String> = std::env::args()
             .filter(|a| a != "--backend")
             .collect();
-        theclicker::TheClicker::new(theclicker::Args::parse_from(filtered)).main_loop();
+        crate::theclicker::TheClicker::new(crate::theclicker::Args::parse_from(filtered))
+            .main_loop();
         return Ok(());
     }
 

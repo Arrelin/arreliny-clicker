@@ -1,4 +1,4 @@
-use theclicker::InputDevice;
+use crate::theclicker::InputDevice;
 
 use crate::config::HotkeyBind;
 

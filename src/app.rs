@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
-use theclicker::InputDevice;
+use crate::theclicker::InputDevice;
 
 use crate::config::{Config, HotkeyBind};
 use crate::input::{clean_name, key_label, load_devices, modifier_bit};
