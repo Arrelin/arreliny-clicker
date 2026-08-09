@@ -1,4 +1,4 @@
-use crate::theclicker::InputDevice;
+use crate::clicker::InputDevice;
 
 use crate::config::HotkeyBind;
 
@@ -13,11 +13,7 @@ pub fn load_devices() -> Vec<(String, String)> {
         .into_iter()
         .map(|d| {
             let display = clean_name(&d.name).to_string();
-            let base_name = display
-                .strip_suffix(&format!("-{}", d.filename))
-                .unwrap_or(&display)
-                .to_string();
-            (display, base_name)
+            (display.clone(), display)
         })
         .collect()
 }

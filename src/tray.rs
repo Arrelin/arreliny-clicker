@@ -17,7 +17,7 @@ pub struct ClickerTray {
 
 impl ksni::Tray for ClickerTray {
     fn id(&self) -> String {
-        "theclicker-gui".into()
+        "arreliny-clicker".into()
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
@@ -30,7 +30,7 @@ impl ksni::Tray for ClickerTray {
     }
 
     fn title(&self) -> String {
-        "TheClicker".into()
+        "Arreliny Clicker".into()
     }
 
     fn icon_name(&self) -> String {
@@ -57,7 +57,7 @@ impl ksni::Tray for ClickerTray {
             "Idle"
         };
         ksni::ToolTip {
-            title: "TheClicker".into(),
+            title: "Arreliny Clicker".into(),
             description: description.into(),
             ..Default::default()
         }

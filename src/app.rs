@@ -4,13 +4,13 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
-use crate::theclicker::InputDevice;
+use crate::clicker::InputDevice;
 
-use crate::config::{Config, HotkeyBind};
+use crate::config::{ClickerMode, Config, HotkeyBind};
 use crate::input::{clean_name, key_label, load_devices, modifier_bit};
 use crate::tray::{ClickerTray, TrayAction};
 use crate::types::{Action, KeyTarget, Screen};
-use crate::widgets::{bind_row, hotkey_bind_row};
+use crate::widgets::{bind_row, capture_row, hotkey_bind_row};
 
 pub struct App {
     pub config: Config,
@@ -43,10 +43,11 @@ impl App {
             family.retain(|f| f != "NotoEmoji-Regular");
         }
         cc.egui_ctx.set_fonts(fonts);
-        let config = cc
+        let mut config: Config = cc
             .storage
             .and_then(|s| eframe::get_value(s, eframe::APP_KEY))
             .unwrap_or_default();
+        config.device_name.retain(|character| character != '\0');
         Self {
             config,
             screen: Screen::Config,
@@ -162,7 +163,8 @@ impl App {
             Action::Refresh => {
                 self.devices = load_devices();
             }
-            Action::FindMouse => {
+            find_action @ (Action::FindMouse | Action::FindKeyboard) => {
+                let find_mouse = matches!(find_action, Action::FindMouse);
                 let (tx, rx) = mpsc::channel();
                 let stop = Arc::new(AtomicBool::new(false));
                 let stop_clone = stop.clone();
@@ -172,11 +174,7 @@ impl App {
                         .into_iter()
                         .map(|device| {
                             let display = clean_name(&device.name).to_string();
-                            let base_name = display
-                                .strip_suffix(&format!("-{}", device.filename))
-                                .unwrap_or(&display)
-                                .to_string();
-                            (device, base_name)
+                            (device, display)
                         })
                         .collect();
                     let mut pollfds: Vec<libc::pollfd> = named
@@ -207,7 +205,7 @@ impl App {
                                 if let Ok(len) = named[i].0.read(&mut events) {
                                     for event in &events[..len] {
                                         if event.type_ == EV_KEY as u16
-                                            && event.code == BTN_LEFT as u16
+                                            && (!find_mouse || event.code == BTN_LEFT as u16)
                                             && event.value == 1
                                         {
                                             let _ = tx.send(named[i].1.clone());
@@ -221,7 +219,11 @@ impl App {
                 });
                 self.find_rx = Some(rx);
                 self.find_cancel = Some(stop);
-                self.screen = Screen::FindMouse;
+                self.screen = if find_mouse {
+                    Screen::FindMouse
+                } else {
+                    Screen::FindKeyboard
+                };
             }
             Action::StartCapture(target) => {
                 if target != KeyTarget::HotkeyStartStop && self.config.device_name.is_empty() {
@@ -341,42 +343,53 @@ impl App {
                 };
                 let mut cmd = std::process::Command::new(exe);
                 cmd.arg("--backend");
-                cmd.arg("run");
-                cmd.arg(format!("-d{}", clean_name(&cfg.device_name)));
-                cmd.arg(format!("-c{}", cfg.cooldown));
-                cmd.arg(format!("-C{}", cfg.cooldown_press_release));
-                if cfg.enable_left {
-                    if let Some(b) = cfg.left_bind {
-                        cmd.arg(format!("-l{b}"));
+                match cfg.mode {
+                    ClickerMode::Mouse => {
+                        cmd.arg("run");
+                        cmd.arg(format!("-d{}", clean_name(&cfg.device_name)));
+                        cmd.arg(format!("-c{}", cfg.cooldown_ns));
+                        cmd.arg(format!("-C{}", cfg.cooldown_press_release_ns));
+                        if cfg.enable_left {
+                            if let Some(b) = cfg.left_bind {
+                                cmd.arg(format!("-l{b}"));
+                            }
+                        }
+                        if cfg.enable_middle {
+                            if let Some(b) = cfg.middle_bind {
+                                cmd.arg(format!("-m{b}"));
+                            }
+                        }
+                        if cfg.enable_right {
+                            if let Some(b) = cfg.right_bind {
+                                cmd.arg(format!("-r{b}"));
+                            }
+                        }
+                        if cfg.enable_lock_unlock {
+                            if let Some(b) = cfg.lock_unlock_bind {
+                                cmd.arg(format!("-T{b}"));
+                            }
+                        }
+                        if cfg.hold {
+                            cmd.arg("-H");
+                        }
                     }
-                }
-                if cfg.enable_middle {
-                    if let Some(b) = cfg.middle_bind {
-                        cmd.arg(format!("-m{b}"));
+                    ClickerMode::Keyboard => {
+                        cmd.arg("repeat");
+                        cmd.arg(format!("-d{}", clean_name(&cfg.device_name)));
+                        cmd.arg(format!("-k{}", cfg.repeat_key.unwrap()));
+                        cmd.arg(format!("-t{}", cfg.repeat_trigger.unwrap()));
+                        cmd.arg(format!("-c{}", cfg.repeat_delay_ns));
                     }
-                }
-                if cfg.enable_right {
-                    if let Some(b) = cfg.right_bind {
-                        cmd.arg(format!("-r{b}"));
-                    }
-                }
-                if cfg.enable_lock_unlock {
-                    if let Some(b) = cfg.lock_unlock_bind {
-                        cmd.arg(format!("-T{b}"));
-                    }
-                }
-                if cfg.hold {
-                    cmd.arg("-H");
                 }
                 if cfg.grab {
                     cmd.arg("--grab");
                 }
                 cmd.stdout(std::process::Stdio::piped());
                 cmd.stderr(std::process::Stdio::null());
-                log::debug!("Launching theclicker with args: {:?}", cmd.get_args().collect::<Vec<_>>());
+                log::debug!("Launching clicker with args: {:?}", cmd.get_args().collect::<Vec<_>>());
                 match cmd.spawn() {
                     Ok(mut child) => {
-                        log::info!("theclicker started (pid {})", child.id());
+                        log::info!("Clicker started (pid {})", child.id());
                         if let Some(stdout) = child.stdout.take() {
                             let tray = self.tray.clone();
                             std::thread::spawn(move || {
@@ -384,12 +397,13 @@ impl App {
                                 let (mut prev_locked, mut prev_clicking) = (false, false);
                                 for line in reader.lines() {
                                     let Ok(line) = line else { break };
-                                    log::trace!("theclicker: {line}");
+                                    log::trace!("clicker: {line}");
                                     if line.starts_with("Active:") {
                                         let locked = line.contains("LOCKED");
                                         let clicking = line.contains("left")
                                             || line.contains("right")
-                                            || line.contains("middle");
+                                            || line.contains("middle")
+                                            || line.contains("repeat");
                                         if locked != prev_locked || clicking != prev_clicking {
                                             prev_locked = locked;
                                             prev_clicking = clicking;
@@ -417,14 +431,14 @@ impl App {
                         self.status = "Running".to_string();
                     }
                     Err(e) => {
-                        log::error!("Failed to start theclicker: {e}");
+                        log::error!("Failed to start clicker: {e}");
                         self.status = format!("Failed to start: {e}");
                     }
                 }
             }
             Action::Stop => {
                 if let Some(mut child) = self.child.take() {
-                    log::info!("Stopping theclicker (pid {})", child.id());
+                    log::info!("Stopping clicker (pid {})", child.id());
                     let _ = child.kill();
                     let _ = child.wait();
                 }
@@ -460,7 +474,7 @@ impl eframe::App for App {
             }
         }
 
-        if self.screen == Screen::FindMouse {
+        if matches!(self.screen, Screen::FindMouse | Screen::FindKeyboard) {
             if let Some(rx) = &self.find_rx {
                 if let Ok(base_name) = rx.try_recv() {
                     self.config.device_name = base_name;
@@ -480,6 +494,8 @@ impl eframe::App for App {
                         Some(KeyTarget::Left) => self.config.left_bind = Some(code),
                         Some(KeyTarget::Middle) => self.config.middle_bind = Some(code),
                         Some(KeyTarget::Right) => self.config.right_bind = Some(code),
+                        Some(KeyTarget::RepeatKey) => self.config.repeat_key = Some(code),
+                        Some(KeyTarget::RepeatTrigger) => self.config.repeat_trigger = Some(code),
                         Some(KeyTarget::HotkeyStartStop) => {
                             self.config.hotkey_bind = Some(HotkeyBind { key: code, mods });
                         }
@@ -528,7 +544,7 @@ impl eframe::App for App {
                                 egui::Sense::hover(),
                             );
                             ui.painter().circle_filled(rect.center(), 6.0, Color32::GREEN);
-                            ui.heading(RichText::new("TheClicker is Running").color(Color32::GREEN));
+                            ui.heading(RichText::new("Arreliny Clicker is Running").color(Color32::GREEN));
                         });
                         ui.add_space(16.0);
                     });
@@ -550,25 +566,37 @@ impl eframe::App for App {
                             .num_columns(2)
                             .spacing([12.0, 4.0])
                             .show(ui, |ui| {
-                                if cfg.enable_left {
-                                    ui.label("Left click:");
-                                    ui.label(RichText::new(cfg.left_bind.map(key_label).unwrap_or_else(|| "—".into())).monospace());
-                                    ui.end_row();
-                                }
-                                if cfg.enable_middle {
-                                    ui.label("Middle click:");
-                                    ui.label(RichText::new(cfg.middle_bind.map(key_label).unwrap_or_else(|| "—".into())).monospace());
-                                    ui.end_row();
-                                }
-                                if cfg.enable_right {
-                                    ui.label("Right click:");
-                                    ui.label(RichText::new(cfg.right_bind.map(key_label).unwrap_or_else(|| "—".into())).monospace());
-                                    ui.end_row();
-                                }
-                                if cfg.enable_lock_unlock {
-                                    ui.label("Lock/Unlock:");
-                                    ui.label(RichText::new(cfg.lock_unlock_bind.map(key_label).unwrap_or_else(|| "—".into())).monospace());
-                                    ui.end_row();
+                                match cfg.mode {
+                                    ClickerMode::Mouse => {
+                                        if cfg.enable_left {
+                                            ui.label("Left click:");
+                                            ui.label(RichText::new(cfg.left_bind.map(key_label).unwrap_or_else(|| "—".into())).monospace());
+                                            ui.end_row();
+                                        }
+                                        if cfg.enable_middle {
+                                            ui.label("Middle click:");
+                                            ui.label(RichText::new(cfg.middle_bind.map(key_label).unwrap_or_else(|| "—".into())).monospace());
+                                            ui.end_row();
+                                        }
+                                        if cfg.enable_right {
+                                            ui.label("Right click:");
+                                            ui.label(RichText::new(cfg.right_bind.map(key_label).unwrap_or_else(|| "—".into())).monospace());
+                                            ui.end_row();
+                                        }
+                                        if cfg.enable_lock_unlock {
+                                            ui.label("Lock/Unlock:");
+                                            ui.label(RichText::new(cfg.lock_unlock_bind.map(key_label).unwrap_or_else(|| "—".into())).monospace());
+                                            ui.end_row();
+                                        }
+                                    }
+                                    ClickerMode::Keyboard => {
+                                        ui.label("Repeat key:");
+                                        ui.label(RichText::new(cfg.repeat_key.map(key_label).unwrap_or_else(|| "—".into())).monospace());
+                                        ui.end_row();
+                                        ui.label("Trigger:");
+                                        ui.label(RichText::new(cfg.repeat_trigger.map(key_label).unwrap_or_else(|| "—".into())).monospace());
+                                        ui.end_row();
+                                    }
                                 }
                             });
                     });
@@ -582,17 +610,24 @@ impl eframe::App for App {
                             .num_columns(2)
                             .spacing([12.0, 4.0])
                             .show(ui, |ui| {
-                                ui.label("Cooldown:");
-                                ui.label(RichText::new(format!("{} ms", cfg.cooldown)).monospace());
+                                ui.label(if cfg.mode == ClickerMode::Mouse { "Cooldown:" } else { "Repeat rate:" });
+                                let rate = if cfg.mode == ClickerMode::Mouse {
+                                    format!("{} ns", cfg.cooldown_ns)
+                                } else {
+                                    format!("{} ns", cfg.repeat_delay_ns)
+                                };
+                                ui.label(RichText::new(rate).monospace());
                                 ui.end_row();
-                                if cfg.cooldown_press_release > 0 {
+                                if cfg.mode == ClickerMode::Mouse && cfg.cooldown_press_release_ns > 0 {
                                     ui.label("Press-release gap:");
-                                    ui.label(RichText::new(format!("{} ms", cfg.cooldown_press_release)).monospace());
+                                    ui.label(RichText::new(format!("{} ns", cfg.cooldown_press_release_ns)).monospace());
                                     ui.end_row();
                                 }
-                                ui.label("Hold mode:");
-                                ui.label(RichText::new(if cfg.hold { "on" } else { "off" }).monospace());
-                                ui.end_row();
+                                if cfg.mode == ClickerMode::Mouse {
+                                    ui.label("Hold mode:");
+                                    ui.label(RichText::new(if cfg.hold { "on" } else { "off" }).monospace());
+                                    ui.end_row();
+                                }
                                 ui.label("Grab device:");
                                 ui.label(RichText::new(if cfg.grab { "on" } else { "off" }).monospace());
                                 ui.end_row();
@@ -634,12 +669,17 @@ impl eframe::App for App {
                     }
                 });
             }
-            Screen::FindMouse => {
+            Screen::FindMouse | Screen::FindKeyboard => {
                 ui.vertical_centered(|ui| {
                     ui.add_space(100.0);
-                    ui.heading("Click left mouse button...");
+                    let finding_mouse = self.screen == Screen::FindMouse;
+                    ui.heading(if finding_mouse {
+                        "Click left mouse button..."
+                    } else {
+                        "Press any keyboard key..."
+                    });
                     ui.add_space(12.0);
-                    ui.label(RichText::new("The device that produces the click will be selected").weak().italics());
+                    ui.label(RichText::new("The device that produces the input will be selected").weak().italics());
                     ui.add_space(24.0);
                     if ui.button("Cancel").clicked() {
                         if let Some(cancel) = self.find_cancel.take() {
@@ -652,14 +692,36 @@ impl eframe::App for App {
             }
             Screen::Config => {
                 egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(
+                            &mut self.config.mode,
+                            ClickerMode::Mouse,
+                            "Mouse clicks",
+                        );
+                        ui.selectable_value(
+                            &mut self.config.mode,
+                            ClickerMode::Keyboard,
+                            "Keyboard repeat",
+                        );
+                    });
+
+                    ui.add_space(6.0);
+
                     ui.group(|ui| {
                         ui.horizontal(|ui| {
                             ui.heading("Device");
                             if ui.small_button("↺ Refresh").clicked() {
                                 action = Some(Action::Refresh);
                             }
-                            if ui.small_button("Find Mouse").clicked() {
-                                action = Some(Action::FindMouse);
+                            let find_label = match self.config.mode {
+                                ClickerMode::Mouse => "Find Mouse",
+                                ClickerMode::Keyboard => "Find Keyboard",
+                            };
+                            if ui.small_button(find_label).clicked() {
+                                action = Some(match self.config.mode {
+                                    ClickerMode::Mouse => Action::FindMouse,
+                                    ClickerMode::Keyboard => Action::FindKeyboard,
+                                });
                             }
                         });
                         ui.add_space(4.0);
@@ -690,17 +752,29 @@ impl eframe::App for App {
                         ui.heading("Bindings");
                         ui.add_space(4.0);
 
-                        if bind_row(ui, &mut self.config.enable_lock_unlock, "Lock/Unlock", &mut self.config.lock_unlock_bind) {
-                            action = Some(Action::StartCapture(KeyTarget::LockUnlock));
-                        }
-                        if bind_row(ui, &mut self.config.enable_left, "Left click", &mut self.config.left_bind) {
-                            action = Some(Action::StartCapture(KeyTarget::Left));
-                        }
-                        if bind_row(ui, &mut self.config.enable_middle, "Middle click", &mut self.config.middle_bind) {
-                            action = Some(Action::StartCapture(KeyTarget::Middle));
-                        }
-                        if bind_row(ui, &mut self.config.enable_right, "Right click", &mut self.config.right_bind) {
-                            action = Some(Action::StartCapture(KeyTarget::Right));
+                        match self.config.mode {
+                            ClickerMode::Mouse => {
+                                if bind_row(ui, &mut self.config.enable_lock_unlock, "Lock/Unlock", &mut self.config.lock_unlock_bind) {
+                                    action = Some(Action::StartCapture(KeyTarget::LockUnlock));
+                                }
+                                if bind_row(ui, &mut self.config.enable_left, "Left click", &mut self.config.left_bind) {
+                                    action = Some(Action::StartCapture(KeyTarget::Left));
+                                }
+                                if bind_row(ui, &mut self.config.enable_middle, "Middle click", &mut self.config.middle_bind) {
+                                    action = Some(Action::StartCapture(KeyTarget::Middle));
+                                }
+                                if bind_row(ui, &mut self.config.enable_right, "Right click", &mut self.config.right_bind) {
+                                    action = Some(Action::StartCapture(KeyTarget::Right));
+                                }
+                            }
+                            ClickerMode::Keyboard => {
+                                if capture_row(ui, "Key to repeat", &mut self.config.repeat_key) {
+                                    action = Some(Action::StartCapture(KeyTarget::RepeatKey));
+                                }
+                                if capture_row(ui, "Hold to repeat", &mut self.config.repeat_trigger) {
+                                    action = Some(Action::StartCapture(KeyTarget::RepeatTrigger));
+                                }
+                            }
                         }
 
                         ui.separator();
@@ -716,17 +790,19 @@ impl eframe::App for App {
                         ui.heading("Settings");
                         ui.add_space(4.0);
 
-                        ui.checkbox(
-                            &mut self.config.hold,
-                            "Hold mode (hold key to click, release to stop)",
-                        );
+                        if self.config.mode == ClickerMode::Mouse {
+                            ui.checkbox(
+                                &mut self.config.hold,
+                                "Hold mode (hold key to click, release to stop)",
+                            );
+                        }
 
                         ui.horizontal(|ui| {
                             ui.checkbox(&mut self.config.grab, "Grab device");
                             if self.config.grab {
                                 ui.label(
                                     RichText::new(
-                                        "⚠ May softlock if compositor ignores TheClicker device",
+                                        "⚠ May softlock if compositor ignores the virtual device",
                                     )
                                     .color(Color32::YELLOW)
                                     .small(),
@@ -734,47 +810,50 @@ impl eframe::App for App {
                             }
                         });
 
-                        if ui.checkbox(&mut self.config.no_min_delay, "My system can go faster").changed()
-                            && !self.config.no_min_delay
-                        {
-                            self.config.cooldown = self.config.cooldown.max(25);
-                        }
-
                         ui.add_space(4.0);
 
                         egui::Grid::new("settings_grid")
                             .num_columns(2)
                             .spacing([8.0, 4.0])
                             .show(ui, |ui| {
-                                let cooldown_label = if self.config.no_min_delay {
-                                    "Cooldown (ms):"
+                                let cooldown_label = if self.config.mode == ClickerMode::Keyboard {
+                                    "Repeat delay (ns):"
                                 } else {
-                                    "Cooldown (ms, min 25):"
+                                    "Cooldown (ns):"
                                 };
                                 ui.label(cooldown_label);
-                                let mut s = self.config.cooldown.to_string();
+                                let mut s = match self.config.mode {
+                                    ClickerMode::Mouse => self.config.cooldown_ns,
+                                    ClickerMode::Keyboard => self.config.repeat_delay_ns,
+                                }
+                                .to_string();
                                 if ui
                                     .add(egui::TextEdit::singleline(&mut s).desired_width(60.0))
                                     .changed()
                                 {
                                     if let Ok(v) = s.parse::<u64>() {
-                                        let min = if self.config.no_min_delay { 1 } else { 25 };
-                                        self.config.cooldown = v.max(min);
+                                        if self.config.mode == ClickerMode::Keyboard {
+                                            self.config.repeat_delay_ns = v.max(1);
+                                        } else {
+                                            self.config.cooldown_ns = v.max(1);
+                                        }
                                     }
                                 }
                                 ui.end_row();
 
-                                ui.label("Press-release gap (ms):");
-                                let mut s = self.config.cooldown_press_release.to_string();
-                                if ui
-                                    .add(egui::TextEdit::singleline(&mut s).desired_width(60.0))
-                                    .changed()
-                                {
-                                    if let Ok(v) = s.parse::<u64>() {
-                                        self.config.cooldown_press_release = v;
+                                if self.config.mode == ClickerMode::Mouse {
+                                    ui.label("Press-release gap (ns):");
+                                    let mut s = self.config.cooldown_press_release_ns.to_string();
+                                    if ui
+                                        .add(egui::TextEdit::singleline(&mut s).desired_width(60.0))
+                                        .changed()
+                                    {
+                                        if let Ok(v) = s.parse::<u64>() {
+                                            self.config.cooldown_press_release_ns = v;
+                                        }
                                     }
+                                    ui.end_row();
                                 }
-                                ui.end_row();
                             });
                     });
 

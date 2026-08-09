@@ -4,6 +4,8 @@ pub enum KeyTarget {
     Left,
     Middle,
     Right,
+    RepeatKey,
+    RepeatTrigger,
     HotkeyStartStop,
 }
 
@@ -14,6 +16,8 @@ impl KeyTarget {
             KeyTarget::Left => "Left click",
             KeyTarget::Middle => "Middle click",
             KeyTarget::Right => "Right click",
+            KeyTarget::RepeatKey => "Key to repeat",
+            KeyTarget::RepeatTrigger => "Hold to repeat",
             KeyTarget::HotkeyStartStop => "Start/Stop hotkey",
         }
     }
@@ -25,12 +29,14 @@ pub enum Screen {
     Config,
     KeyCapture,
     FindMouse,
+    FindKeyboard,
     Running,
 }
 
 pub enum Action {
     StartCapture(KeyTarget),
     FindMouse,
+    FindKeyboard,
     Launch,
     Stop,
     Refresh,

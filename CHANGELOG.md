@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Added keyboard repeat mode with keyboard detection, configurable key and hold trigger, and repeat rate
+- Added nanosecond delay configuration for mouse clicks and keyboard repeat
+- Added an evdev input rate tester available through `--tester`
+
+### Changed
+
+- Renamed the project to Arreliny Clicker
+
 ## [0.4.1]
 
 ### Fixed

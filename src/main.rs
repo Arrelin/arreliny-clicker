@@ -2,7 +2,8 @@ mod app;
 mod config;
 mod input;
 mod tray;
-mod theclicker;
+mod clicker;
+mod tester;
 mod types;
 mod widgets;
 
@@ -27,18 +28,23 @@ fn init_logger() {
 }
 
 fn main() -> eframe::Result<()> {
+    if std::env::args().any(|argument| argument == "--tester") {
+        tester::run();
+        return Ok(());
+    }
+
     if std::env::args().any(|a| a == "--backend") {
         use clap::Parser as _;
         let filtered: Vec<String> = std::env::args()
             .filter(|a| a != "--backend")
             .collect();
-        crate::theclicker::TheClicker::new(crate::theclicker::Args::parse_from(filtered))
+        crate::clicker::ArrelinyClicker::new(crate::clicker::Args::parse_from(filtered))
             .main_loop();
         return Ok(());
     }
 
     init_logger();
-    log::info!("Starting theclicker-gui");
+    log::info!("Starting arreliny-clicker");
 
     use ksni::blocking::TrayMethods as _;
     let (tray_tx, tray_rx) = std::sync::mpsc::channel::<TrayAction>();
@@ -50,7 +56,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "TheClicker GUI",
+        "Arreliny Clicker",
         options,
         Box::new(move |cc| {
             let ctx = cc.egui_ctx.clone();

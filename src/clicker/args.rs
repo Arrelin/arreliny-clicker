@@ -24,7 +24,7 @@ pub enum Command {
         #[arg(long, default_value_t = false)]
         grab: bool,
 
-        #[arg(short, default_value_t = 25)]
+        #[arg(short, default_value_t = 25_000_000)]
         cooldown: u64,
 
         #[arg(short = 'C', default_value_t = 0)]
@@ -34,11 +34,27 @@ pub enum Command {
         #[arg(short = 'd')]
         device_query: String,
 
-        #[arg(short, default_value_t = 25)]
+        #[arg(short, default_value_t = 25_000_000)]
         cooldown: u64,
 
         #[arg(short = 'C', default_value_t = 0)]
         cooldown_press_release: u64,
+    },
+    Repeat {
+        #[arg(short = 'd')]
+        device_query: String,
+
+        #[arg(short = 'k')]
+        repeat_key: u16,
+
+        #[arg(short = 't')]
+        trigger: u16,
+
+        #[arg(short, default_value_t = 1_000_000)]
+        cooldown: u64,
+
+        #[arg(long, default_value_t = false)]
+        grab: bool,
     },
 }
 

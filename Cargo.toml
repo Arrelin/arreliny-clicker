@@ -1,12 +1,12 @@
 [package]
-name = "theclicker-gui"
+name = "arreliny-clicker"
 version = "0.4.1"
 edition = "2024"
-description = "A graphical frontend for theclicker — a Linux autoclicker for X11 and Wayland"
+description = "A graphical Linux autoclicker for X11 and Wayland"
 license = "MIT"
-repository = "https://github.com/Arrelin/theclicker-gui"
+repository = "https://github.com/Arrelin/arreliny-clicker"
 readme = "README.md"
-keywords = ["autoclicker", "gui", "theclicker", "linux"]
+keywords = ["autoclicker", "gui", "mouse", "linux"]
 categories = ["gui"]
 
 [profile.release]

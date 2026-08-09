@@ -18,7 +18,10 @@ where
         ui.checkbox(enabled, label);
         if *enabled {
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                let text = bind.as_ref().map(&fmt).unwrap_or_else(|| "not set".to_string());
+                let text = bind
+                    .as_ref()
+                    .map(&fmt)
+                    .unwrap_or_else(|| "not set".to_string());
                 ui.label(RichText::new(text).monospace().color(if bind.is_some() {
                     Color32::GREEN
                 } else {
@@ -51,4 +54,24 @@ pub fn hotkey_bind_row(
     bind: &mut Option<HotkeyBind>,
 ) -> bool {
     bind_row_inner(ui, enabled, "Start/Stop hotkey", bind, hotkey_label)
+}
+
+pub fn capture_row(ui: &mut egui::Ui, label: &str, bind: &mut Option<u16>) -> bool {
+    let mut capture = false;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        let text = bind.map(key_label).unwrap_or_else(|| "not set".to_string());
+        ui.label(RichText::new(text).monospace().color(if bind.is_some() {
+            Color32::GREEN
+        } else {
+            Color32::from_rgb(180, 100, 100)
+        }));
+        if ui.small_button("Capture").clicked() {
+            capture = true;
+        }
+        if bind.is_some() && ui.small_button("Clear").clicked() {
+            *bind = None;
+        }
+    });
+    capture
 }

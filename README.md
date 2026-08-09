@@ -1,6 +1,6 @@
-# theclicker-gui
+# Arreliny Clicker
 
-A graphical Linux autoclicker for X11 and Wayland, powered by [theclicker](https://crates.io/crates/theclicker).
+A graphical Linux autoclicker for X11 and Wayland.
 
 ## Requirements
 
@@ -13,7 +13,7 @@ A graphical Linux autoclicker for X11 and Wayland, powered by [theclicker](https
 ## Installation
 
 ```bash
-cargo install theclicker-gui
+cargo install arreliny-clicker
 ```
 
 ## Features
@@ -23,18 +23,19 @@ cargo install theclicker-gui
 - Lock/Unlock binding to pause clicking without stopping
 - Hold mode — hold the bind to click, release to stop
 - Grab mode — captures the input device so bindings don't pass through to the system
-- Configurable cooldown (ms) and press-release gap (ms)
+- Configurable cooldown and press-release gap in nanoseconds
 - System tray icon (SNI) showing current state: idle / locked / clicking
 - Settings are persisted across restarts
 - Global Start/Stop hotkey (keyboard binding to toggle the clicker from anywhere)
+- Keyboard repeat mode with a selectable key, hold trigger, and repeat rate
 
 ## Usage
 
 Launch the GUI:
 ```bash
-theclicker-gui
+arreliny-clicker
 # or directly
-~/.cargo/bin/theclicker-gui
+~/.cargo/bin/arreliny-clicker
 ```
 
 1. Select your input device from the dropdown or press **Find Mouse** and click with your mouse
@@ -44,6 +45,17 @@ theclicker-gui
 
 ## Notes
 
-- Minimum cooldown is 25 ms (~40 clicks/sec), which is the Linux kernel limit for uinput events (some kernels bypass that, like cachyos, etc)
-- Grab mode may softlock input if your compositor does not recognize the virtual device created by theclicker
+- Very small delays depend on scheduler precision and application event handling
+- Nanosecond delays can generate millions of events per second and may overload terminals, browsers, or the desktop session
+- Grab mode may softlock input if your compositor does not recognize the virtual device
 - The system tray icon requires a compositor or panel that supports the StatusNotifierItem (SNI) protocol (KDE Plasma, waybar, etc.)
+
+## Input rate tester
+
+Run a second instance while the clicker is active:
+
+```bash
+arreliny-clicker --tester --key 272 --seconds 10
+```
+
+`272` is the left mouse button. Keyboard keys use the numeric evdev code displayed in the GUI.

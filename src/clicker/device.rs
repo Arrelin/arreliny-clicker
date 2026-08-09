@@ -41,6 +41,7 @@ impl InputDevice {
 
         let name_bytes = handler.device_name().unwrap_or(vec![]);
         let name = String::from_utf8_lossy(&name_bytes);
+        let name = name.trim_matches('\0');
 
         let name = format!("{name}-{}", path.file_name().unwrap().to_str().unwrap());
 
@@ -179,6 +180,12 @@ impl OutputDevice {
         self.handler.set_keybit(Key::ButtonRight).unwrap();
     }
 
+    pub fn add_keyboard_attributes(&self, key: Key) {
+        self.handler.set_evbit(EventKind::Key).unwrap();
+        self.handler.set_evbit(EventKind::Synchronize).unwrap();
+        self.handler.set_keybit(key).unwrap();
+    }
+
     pub fn copy_attributes(&self, debug: bool, from: &InputDevice) {
         let to = &self.handler;
         let from = &from.handler;
@@ -243,6 +250,26 @@ impl OutputDevice {
         ];
         self.write(&events)
             .expect("Cannot send key event: {events:?}");
+    }
+
+    pub fn send_key_click(&self, key: Key) {
+        let time = get_current_time();
+        let events: [input_event; 4] = [
+            InputEvent::from(KeyEvent::new(time, key, KeyState::PRESSED))
+                .as_raw()
+                .to_owned(),
+            InputEvent::from(SynchronizeEvent::report(time))
+                .as_raw()
+                .to_owned(),
+            InputEvent::from(KeyEvent::new(time, key, KeyState::RELEASED))
+                .as_raw()
+                .to_owned(),
+            InputEvent::from(SynchronizeEvent::report(time))
+                .as_raw()
+                .to_owned(),
+        ];
+        self.write(&events)
+            .expect("Cannot send key click: {events:?}");
     }
 }
 

@@ -9,7 +9,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub use device::{InputDevice, OutputDevice};
@@ -79,7 +79,7 @@ impl StateNormal {
                     Ok(len) => len,
                     Err(err) => {
                         eprintln!("\x1B[1;31mCaptured device error: {err}\x1B[22;39m");
-                        eprintln!("\x1B[1;33mThe Clicker will terminate!\x1B[22;39m");
+                        eprintln!("\x1B[1;33mArreliny Clicker will terminate!\x1B[22;39m");
                         eprintln!();
                         std::process::exit(1);
                     }
@@ -149,6 +149,77 @@ impl StateNormal {
 pub struct StateLegacy {
     cooldown: Duration,
     cooldown_pr: Duration,
+}
+
+pub struct StateRepeat {
+    repeat_key: Key,
+    trigger: u16,
+    grab: bool,
+    cooldown: Duration,
+}
+
+impl StateRepeat {
+    fn run(self, shared: Shared) {
+        let (transmitter, receiver) = mpsc::channel::<bool>();
+        let mut events: [input_event; 1] = unsafe { std::mem::zeroed() };
+        let input = shared.input;
+        let output = shared.output.clone();
+        let trigger = self.trigger;
+        let grab = self.grab;
+        let debug = shared.debug;
+
+        thread::spawn(move || {
+            let mut active = false;
+            loop {
+                let len = input
+                    .read(&mut events)
+                    .expect("Cannot read captured keyboard");
+                for event in &events[..len] {
+                    if debug {
+                        println!("Event: {:?}", event);
+                    }
+                    let used =
+                        event.type_ == input_linux::sys::EV_KEY as u16 && event.code == trigger;
+                    if used {
+                        let next = event.value != 0;
+                        if next != active {
+                            active = next;
+                            transmitter.send(active).unwrap();
+                        }
+                    } else if grab {
+                        output
+                            .write(&events[..len])
+                            .expect("Cannot write to virtual device");
+                        break;
+                    }
+                }
+            }
+        });
+
+        let mut active = false;
+        let mut next_tick = Instant::now();
+        println!("Active:");
+        loop {
+            if let Some(next) = if active {
+                receiver.try_recv().ok()
+            } else {
+                receiver.recv().ok()
+            } {
+                active = next;
+                if active {
+                    next_tick = Instant::now();
+                }
+                println!("Active: {}", if active { "repeat" } else { "" });
+            }
+            if active {
+                shared.output.send_key_click(self.repeat_key);
+                next_tick += self.cooldown;
+                if let Some(delay) = next_tick.checked_duration_since(Instant::now()) {
+                    thread::sleep(delay);
+                }
+            }
+        }
+    }
 }
 
 impl StateLegacy {
@@ -229,6 +300,7 @@ fn autoclicker(
     cooldown_pr: Duration,
 ) {
     let mut toggle = AutoclickerState::default();
+    let mut next_tick = Instant::now();
     println!();
     print_active(&toggle);
 
@@ -238,7 +310,12 @@ fn autoclicker(
         } else {
             receiver.recv().ok()
         } {
+            let was_active = toggle.left | toggle.middle | toggle.right;
             toggle = recv;
+            let is_active = toggle.left | toggle.middle | toggle.right;
+            if !was_active && is_active {
+                next_tick = Instant::now();
+            }
 
             if beep {
                 print!("\x07");
@@ -247,36 +324,50 @@ fn autoclicker(
             print_active(&toggle);
         }
 
-        if toggle.left {
-            output.send_key(Key::ButtonLeft, KeyState::PRESSED);
-        }
-        if toggle.middle {
-            output.send_key(Key::ButtonMiddle, KeyState::PRESSED);
-        }
-        if toggle.right {
-            output.send_key(Key::ButtonRight, KeyState::PRESSED);
-        }
-
-        if !cooldown_pr.is_zero() {
+        if cooldown_pr.is_zero() {
+            if toggle.left {
+                output.send_key_click(Key::ButtonLeft);
+            }
+            if toggle.middle {
+                output.send_key_click(Key::ButtonMiddle);
+            }
+            if toggle.right {
+                output.send_key_click(Key::ButtonRight);
+            }
+        } else {
+            if toggle.left {
+                output.send_key(Key::ButtonLeft, KeyState::PRESSED);
+            }
+            if toggle.middle {
+                output.send_key(Key::ButtonMiddle, KeyState::PRESSED);
+            }
+            if toggle.right {
+                output.send_key(Key::ButtonRight, KeyState::PRESSED);
+            }
             thread::sleep(cooldown_pr);
+            if toggle.left {
+                output.send_key(Key::ButtonLeft, KeyState::RELEASED);
+            }
+            if toggle.middle {
+                output.send_key(Key::ButtonMiddle, KeyState::RELEASED);
+            }
+            if toggle.right {
+                output.send_key(Key::ButtonRight, KeyState::RELEASED);
+            }
         }
-
-        if toggle.left {
-            output.send_key(Key::ButtonLeft, KeyState::RELEASED);
+        if toggle.left | toggle.middle | toggle.right {
+            next_tick += cooldown;
+            if let Some(delay) = next_tick.checked_duration_since(Instant::now()) {
+                thread::sleep(delay);
+            }
         }
-        if toggle.middle {
-            output.send_key(Key::ButtonMiddle, KeyState::RELEASED);
-        }
-        if toggle.right {
-            output.send_key(Key::ButtonRight, KeyState::RELEASED);
-        }
-        thread::sleep(cooldown);
     }
 }
 
 pub enum Variant {
     Normal(StateNormal),
     Legacy(StateLegacy),
+    Repeat(StateRepeat),
 }
 
 impl Variant {
@@ -284,6 +375,7 @@ impl Variant {
         match self {
             Variant::Normal(state_normal) => state_normal.run(shared),
             Variant::Legacy(state_legacy) => state_legacy.run(shared),
+            Variant::Repeat(state_repeat) => state_repeat.run(shared),
         }
     }
 }
@@ -295,12 +387,12 @@ pub struct Shared {
     output: Arc<OutputDevice>,
 }
 
-pub struct TheClicker {
+pub struct ArrelinyClicker {
     shared: Shared,
     variant: Variant,
 }
 
-impl TheClicker {
+impl ArrelinyClicker {
     pub fn new(
         Args {
             debug,
@@ -381,8 +473,8 @@ impl TheClicker {
                         lock_unlock_bind,
                         hold,
                         grab,
-                        cooldown: Duration::from_millis(cooldown),
-                        cooldown_pr: Duration::from_millis(cooldown_press_release),
+                        cooldown: Duration::from_nanos(cooldown.max(1)),
+                        cooldown_pr: Duration::from_nanos(cooldown_press_release),
                     }),
                 }
             }
@@ -412,8 +504,44 @@ impl TheClicker {
                         output: Arc::new(output),
                     },
                     variant: Variant::Legacy(StateLegacy {
-                        cooldown: Duration::from_millis(cooldown),
-                        cooldown_pr: Duration::from_millis(cooldown_press_release),
+                        cooldown: Duration::from_nanos(cooldown.max(1)),
+                        cooldown_pr: Duration::from_nanos(cooldown_press_release),
+                    }),
+                }
+            }
+            args::Command::Repeat {
+                device_query,
+                repeat_key,
+                trigger,
+                cooldown,
+                grab,
+            } => {
+                let repeat_key = Key::from_code(repeat_key).expect("Invalid repeat key");
+                output.add_keyboard_attributes(repeat_key);
+                println!(
+                    "repeat -d{device_query:?} -k{} -t{trigger} -c{cooldown}`",
+                    repeat_key.code()
+                );
+
+                let input = input_device_from_query(device_query);
+                if grab {
+                    output.copy_attributes(debug, &input);
+                    input.grab(true).expect("Cannot grab input device!");
+                }
+                output.create(&input);
+
+                Self {
+                    shared: Shared {
+                        debug,
+                        beep,
+                        input,
+                        output: Arc::new(output),
+                    },
+                    variant: Variant::Repeat(StateRepeat {
+                        repeat_key,
+                        trigger,
+                        grab,
+                        cooldown: Duration::from_nanos(cooldown.max(1)),
                     }),
                 }
             }
@@ -485,9 +613,9 @@ fn command_from_user_input() -> args::Command {
 
     if legacy {
         eprintln!("\x1B[1;31mUsing legacy interface for PS/2 device\x1B[0;39m");
-        let cooldown = choose_usize("Choose cooldown, the min is 25", Some(25)) as u64;
+        let cooldown = choose_usize("Choose cooldown in nanoseconds", Some(25_000_000)) as u64;
         let cooldown_press_release =
-            choose_usize("Choose cooldown between press and release", Some(0)) as u64;
+            choose_usize("Choose press-release delay in nanoseconds", Some(0)) as u64;
 
         args::Command::RunLegacy {
             device_query: input_device.path.to_str().unwrap().to_owned(),
@@ -509,26 +637,16 @@ fn command_from_user_input() -> args::Command {
             .then(|| choose_key(&input_device, "right_bind"));
         let hold = choose_yes("You want to hold the bind / active hold_mode?", true);
         println!(
-            "\x1B[1;33mWarning: if you enable grab mode you can get softlocked\x1B[0;39m, if the compositor will not use TheClicker device."
+            "\x1B[1;33mWarning: grab mode can softlock input\x1B[0;39m if the compositor ignores the virtual device."
         );
         println!(
-            "If the device input is grabbed, the input device will be emulated by TheClicker, and when you press a binding that will not be sent"
+            "When input is grabbed, Arreliny Clicker emulates the selected device and intercepts configured bindings"
         );
         let grab = choose_yes("You want to grab the input device?", true);
         println!("Grab: {grab}");
-        let mut cooldown = choose_usize("Choose cooldown, the min is 25", Some(25)) as u64;
-        if cooldown < 25 {
-            cooldown = 25;
-            println!("\x1B[1;39mThe cooldown was set to \x1B[1;32m25\x1B[0;39m");
-            println!(
-                "\x1B[1;33mThe linux kernel does not permit more the 40 events from a device per second!\x1B[0;39m"
-            );
-            println!(
-                "\x1B[;32mIf your kernel permits that, you can bypass this dialog using the command args and modify the -c argument.\x1B[;39m"
-            );
-        }
+        let cooldown = choose_usize("Choose cooldown in nanoseconds", Some(25_000_000)) as u64;
         let cooldown_press_release =
-            choose_usize("Choose cooldown between press and release", Some(0)) as u64;
+            choose_usize("Choose press-release delay in nanoseconds", Some(0)) as u64;
 
         std::thread::sleep(WAIT_KEY_RELEASE);
 
@@ -572,7 +690,7 @@ fn choose_key(input_device: &InputDevice, name: &str) -> u16 {
                 "\x1B[1;31mCaptured device error: {}\x1B[22;39m",
                 result.err().unwrap()
             );
-            eprintln!("\x1B[1;33mThe Clicker will terminate!\x1B[22;39m");
+            eprintln!("\x1B[1;33mArreliny Clicker will terminate!\x1B[22;39m");
             eprintln!();
             std::process::exit(1);
         }
